@@ -1,19 +1,16 @@
-use std::{fs, path::PathBuf, process::exit};
+use std::{path::PathBuf, process::exit};
 
-use globset::{GlobBuilder, GlobSetBuilder};
 use structopt::StructOpt;
 use walkdir::WalkDir;
 
-const ERROR_UNEXISTED: i32 = 1;
+const ERROR_VALIDATION: i32 = 1;
 const ERROR_GLOB: i32 = 2;
 const ERROR_FILE_OPERATION: i32 = 3;
 
+mod utils;
+
 #[derive(Debug, StructOpt)]
-#[structopt(
-    name = "glopy",
-    version = "0.1.0",
-    about = "Copy files using glob pattern"
-)]
+#[structopt(name = "glopy", about = "Copy files using glob pattern")]
 pub struct Opt {
     #[structopt(short, long, help = "excluded patterns")]
     excludes: Vec<String>,
@@ -49,30 +46,25 @@ pub struct Opt {
 fn main() {
     let opt = Opt::from_args();
 
-    validate_paths(&opt);
+    if let Err(e) = utils::validate(&opt) {
+        eprintln!("{}", e);
+        exit(ERROR_VALIDATION);
+    }
 
     // Build includes globset
-    let mut includes_builder = GlobSetBuilder::new();
-    opt.patterns
-        .iter()
-        .for_each(|p| add_pattern(&mut includes_builder, p, opt.ignore_case));
-    let includes = match includes_builder.build() {
-        Ok(r) => r,
+    let includes = match utils::build_globset(&opt.patterns, opt.ignore_case) {
+        Ok(x) => x,
         Err(e) => {
-            eprintln!("Error while building patterns: {}", e);
+            eprintln!("{}", e);
             exit(ERROR_GLOB);
         }
     };
 
     // Build excludes globset
-    let mut excludes_builder = GlobSetBuilder::new();
-    opt.excludes
-        .iter()
-        .for_each(|p| add_pattern(&mut excludes_builder, p, opt.ignore_case));
-    let excludes = match excludes_builder.build() {
+    let excludes = match utils::build_globset(&opt.excludes, opt.ignore_case) {
         Ok(x) => x,
         Err(e) => {
-            eprintln!("Error while building exclude patterns: {}", e);
+            eprintln!("{}", e);
             exit(ERROR_GLOB);
         }
     };
@@ -90,63 +82,17 @@ fn main() {
         })
     {
         let path = file.path();
-        if !excludes.is_match(path) && includes.is_match(path) {
-            let dest_path = opt.dest.join(path.file_name().unwrap());
-            if opt.no_overwrite && dest_path.exists() {
-                continue;
+        let dest_path = opt.dest.join(path.file_name().unwrap());
+
+        match utils::match_copy(path, &dest_path, &includes, &excludes, !opt.no_overwrite) {
+            Ok(true) => {
+                println!("Copy {} -> {}", path.display(), dest_path.display());
             }
-            if let Err(e) = fs::copy(path, &dest_path) {
-                eprintln!(
-                    "[Error] Copy {} -> {}: {}",
-                    path.display(),
-                    dest_path.display(),
-                    e
-                );
+            Err(e) => {
+                eprintln!("{}", e);
                 exit(ERROR_FILE_OPERATION);
             }
-            println!("Copy {} -> {}", path.display(), dest_path.display());
-        }
-    }
-}
-
-fn validate_paths(opt: &Opt) {
-    // Check if source folder exists
-    if !opt.source.exists() {
-        eprintln!(
-            r#"Source folder "{}" does not exists."#,
-            opt.source.display()
-        );
-        exit(ERROR_UNEXISTED);
-    }
-
-    // Check if destination folder exists
-    if !opt.dest.exists() {
-        if opt.create_dest {
-            if let Err(e) = fs::create_dir_all(&opt.dest) {
-                eprintln!("Cannot create folder {}: {}", opt.dest.display(), e);
-                exit(ERROR_FILE_OPERATION);
-            }
-        } else {
-            eprintln!(
-                r#"Destination folder "{}" does not exists."#,
-                opt.dest.display()
-            );
-            exit(ERROR_UNEXISTED);
-        }
-    }
-}
-
-fn add_pattern(builder: &mut GlobSetBuilder, pattern: &str, case_insensitive: bool) {
-    match GlobBuilder::new(pattern)
-        .case_insensitive(case_insensitive)
-        .build()
-    {
-        Err(e) => {
-            eprintln!("{} is not a valid glob pattern", e.glob().unwrap());
-            exit(ERROR_GLOB);
-        }
-        Ok(glob) => {
-            builder.add(glob);
+            _ => (),
         }
     }
 }

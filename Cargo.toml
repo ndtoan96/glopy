@@ -1,6 +1,6 @@
 [package]
 name = "glopy"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Nguyen Duc Toan <ntoan96@gmail.com>"]
 license = "MIT"
 homepage = "https://github.com/ndtoan96/glopy"
