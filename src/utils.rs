@@ -1,4 +1,6 @@
+use core::time;
 use std::path::Path;
+use std::thread;
 
 use globset::GlobBuilder;
 
@@ -85,13 +87,21 @@ pub(crate) fn match_copy(
         if !overwrite && dest.exists() {
             return Ok(false);
         }
-        if let Err(e) = fs::copy(src, dest) {
-            return Err(format!(
-                "[Error] Copy {} -> {}: {}",
-                src.display(),
-                dest.display(),
-                e
-            ));
+
+        // Copy src to dest, if error happens, wait 100ms and retry again for maximum 3 times because
+        // the dest is likely being accessed by another thread
+        let mut err_cnt = 0;
+        while let Err(e) = fs::copy(src, dest) {
+            err_cnt += 1;
+            if err_cnt >= 3 {
+                return Err(format!(
+                    "[Error] Copy {} -> {}: {}",
+                    src.display(),
+                    dest.display(),
+                    e
+                ));
+            }
+            thread::sleep(time::Duration::from_millis(100));
         }
         return Ok(true);
     } else {

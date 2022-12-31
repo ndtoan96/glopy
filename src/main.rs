@@ -1,4 +1,4 @@
-use std::{path::PathBuf, process::exit};
+use std::{path::PathBuf, process::exit, sync::Arc};
 
 use structopt::StructOpt;
 use walkdir::WalkDir;
@@ -14,6 +14,14 @@ mod utils;
 pub struct Opt {
     #[structopt(short, long, help = "excluded patterns")]
     excludes: Vec<String>,
+
+    #[structopt(
+        short,
+        long,
+        default_value = "4",
+        help = "number of threads to run, default is 4"
+    )]
+    num_threads: usize,
 
     #[structopt(short, long, help = "patterns are case insensitive")]
     ignore_case: bool,
@@ -69,6 +77,10 @@ fn main() {
         }
     };
 
+    let pool = threadpool::Builder::new().num_threads(opt.num_threads).build();
+    let includes_ref = Arc::new(includes);
+    let excludes_ref = Arc::new(excludes);
+
     for file in WalkDir::new(opt.source)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -81,18 +93,30 @@ fn main() {
                 .starts_with(opt.dest.canonicalize().unwrap())
         })
     {
-        let path = file.path();
+        let path = file.into_path();
         let dest_path = opt.dest.join(path.file_name().unwrap());
+        let overwrite = !opt.no_overwrite;
+        let includes_sync_ref = Arc::clone(&includes_ref);
+        let excludes_sync_ref = Arc::clone(&excludes_ref);
 
-        match utils::match_copy(path, &dest_path, &includes, &excludes, !opt.no_overwrite) {
-            Ok(true) => {
-                println!("Copy {} -> {}", path.display(), dest_path.display());
+        pool.execute(move || {
+            match utils::match_copy(
+                &path,
+                &dest_path,
+                includes_sync_ref.as_ref(),
+                excludes_sync_ref.as_ref(),
+                overwrite,
+            ) {
+                Ok(true) => {
+                    println!("Copy {} -> {}", path.display(), dest_path.display());
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    exit(ERROR_FILE_OPERATION);
+                }
+                _ => (),
             }
-            Err(e) => {
-                eprintln!("{}", e);
-                exit(ERROR_FILE_OPERATION);
-            }
-            _ => (),
-        }
+        });
     }
+    pool.join();
 }
